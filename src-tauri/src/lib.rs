@@ -904,8 +904,25 @@ fn is_main_window_navigation_allowed(url: &tauri::Url) -> bool {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub fn configure_linux_webkit_environment() {
+    // WebKitGTK 2.42+ 在支持 DRM Explicit Sync 的 Wayland 合成器（如 KDE Plasma 6 / Mutter）下，
+    // DMABUF 硬件加速渲染管线在提交缓冲帧时未正确设置 acquire point，
+    // 会触发 Wayland 协议错误并导致 Gdk Error 71 闪退。
+    // 在用户未显式设置时，默认禁用 DMABUF 渲染器以保证 Wayland 环境下的稳定运行。
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // SAFETY: 仅在应用主流程启动初期、单线程环境下尽早初始化环境变量，不存在并发读写竞争风险。
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    configure_linux_webkit_environment();
+
     let context = tauri::generate_context!();
     #[cfg(desktop)]
     let context = {
@@ -1614,4 +1631,30 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_environment_tests {
+    use super::*;
+
+    #[test]
+    fn test_configure_linux_webkit_environment_sets_default() {
+        unsafe {
+            std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
+        }
+        configure_linux_webkit_environment();
+        assert_eq!(std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").as_deref(), Ok("1"));
+    }
+
+    #[test]
+    fn test_configure_linux_webkit_environment_respects_existing() {
+        unsafe {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "custom_val");
+        }
+        configure_linux_webkit_environment();
+        assert_eq!(std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").as_deref(), Ok("custom_val"));
+        unsafe {
+            std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
+        }
+    }
 }
